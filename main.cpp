@@ -11,6 +11,8 @@
 #include <memoryapi.h>
 #include <heapapi.h>
 
+#include <dinput.h>
+
 FILE *log_file = NULL;
 #define LOG(...){ \
 	if(log_file == NULL){ \
@@ -29,7 +31,12 @@ static void log_buffer(uint8_t *buf, size_t size){
 static void patch(uint32_t location, uint8_t *buf, size_t size){
 	DWORD old_protect;
 	VirtualProtect((void *)location, size, PAGE_EXECUTE_READWRITE, &old_protect);
+	LOG("0x%08x: ", location);
+	log_buffer((uint8_t *)location, size);
 	memcpy((void *)location, buf, size);
+	LOG("-> ");
+	log_buffer((uint8_t *)location, size);
+	LOG("\n");
 	VirtualProtect((void *)location, size, old_protect, &old_protect);
 }
 
@@ -39,11 +46,6 @@ static void find_and_patch(void *begin, size_t size, uint8_t *target, uint8_t *p
 		if(memcmp((void *)(offset + (uint32_t)begin), target, patch_size) == 0){
 			if(i >= first_time && i < times + first_time){
 				patch(offset + (uint32_t)begin, patch_buf, patch_size);
-				LOG("0x%08x: ", offset + (uint32_t)begin);
-				log_buffer(target, patch_size);
-				LOG("-> ");
-				log_buffer(patch_buf, patch_size);
-				LOG("\n");
 			}
 			if(i >= times + first_time){
 				break;
@@ -53,13 +55,57 @@ static void find_and_patch(void *begin, size_t size, uint8_t *target, uint8_t *p
 	}
 }
 
+uint32_t send_constant_force_offset = 0;
 static uint32_t (__attribute__((stdcall)) *send_constant_force_orig)(void *ctx, float param_1, float param_2);
 uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float param_1, float param_2){
 	#if 1
 	LOG("%s: 0x%08x %f %f\n", __func__, ctx, param_1, param_2);
 	#endif
-	param_1 = param_1 * 10;
-	return send_constant_force_orig(ctx, param_1, param_2);
+
+	// boost low end
+	#if 1
+	if(param_1 < 0.1){
+		param_1 = param_1 * 0.5 / 0.1;
+	}else{
+		param_1 = 0.5 + (param_1 - 0.1) * 0.5 / 0.9;
+	}
+	#endif
+
+	uint32_t unknown_object = *(uint32_t *)((uint32_t)ctx + 0x1408);
+	LOG("unknown object 0x%08x\n", unknown_object);
+	if(unknown_object == 0){
+		LOG("%s: unknown object is NULL\n", __func__);
+		return 0;
+	}
+
+	// just send param_1, param_2 seems to be 0 all the time
+	uint32_t effect_object = *(uint32_t *) (unknown_object + 0x14);
+	LOG("effect object 0x%08x\n", effect_object);
+	if(effect_object == 0){
+		LOG("%s: effect object is NULL\n", __func__);
+		return 0;
+	}
+
+	uint32_t ndirections = *(uint32_t *)((uint32_t)ctx + 0x1404);
+	float max_force_setting = *(float *)(send_constant_force_offset + 0x70e580);
+	DIEFFECT effect = {0};
+	DICONSTANTFORCE constant_force = {.lMagnitude = (LONG)(param_1 * max_force_setting)};
+	LONG directions[ndirections] = {0};
+	directions[0] = 1;
+	effect.dwSize = sizeof(effect);
+	effect.dwFlags = DIEFF_OBJECTOFFSETS | DIEFF_CARTESIAN;
+	effect.cAxes = ndirections;
+	effect.rglDirection = directions;
+	effect.cbTypeSpecificParams = sizeof(constant_force);
+	effect.lpvTypeSpecificParams = &constant_force;
+
+	// IDirectInputEffect::SetParameters
+	uint32_t (__attribute__((stdcall)) *f)(uint32_t, uint32_t, uint32_t) = (uint32_t (__attribute__((stdcall)) *)(uint32_t, uint32_t, uint32_t))*(uint32_t *)(*(uint32_t *)effect_object + 0x18);
+	uint32_t ret = f(effect_object, (uint32_t)&effect, DIEP_TYPESPECIFICPARAMS | DIEP_DIRECTION);
+	//LOG("SetParameters ret %x\n", ret);
+	return ret;
+
+	//return send_constant_force_orig(ctx, param_1, param_2);
 }
 
 void hook_send_constant_force(void* begin){
@@ -68,6 +114,15 @@ void hook_send_constant_force(void* begin){
 		return;
 	}
 	once = true;
+
+	// remove limiters
+	uint32_t target = (uint32_t)begin + 0x198851 + 9;
+	send_constant_force_offset = (uint32_t)begin;
+	uint8_t patch_byte = 0xeb;
+	patch(target, &patch_byte, sizeof(patch_byte));
+
+	target = (uint32_t)begin + 0x19DA8F;
+	patch(target, &patch_byte, sizeof(patch_byte));
 
 	const uint32_t target_offset = (uint32_t)begin + 0x1987C0;
 
@@ -103,11 +158,10 @@ void hook_send_constant_force(void* begin){
 	*(uint32_t *)&patch_buf[1] = (uint32_t)send_constant_force_patched;
 
 	patch(target_offset, patch_buf, sizeof(patch_buf));
-	LOG("%s: patched 0x%08x\n", __func__, target_offset);
 }
 
 static void patch(void *begin, size_t size){
-	#if 1
+	#if 0
 	// remove limiter
 	uint8_t target[] = {0xd9, 0x45, 0xc4, 0xd9, 0xc9, 0xdf, 0xf1, 0xdd, 0xd8, 0x76, 0x07};
 	uint8_t patch_buf[] = {0xd9, 0x45, 0xc4, 0xd9, 0xc9, 0xdf, 0xf1, 0xdd, 0xd8, 0xeb, 0x07};
