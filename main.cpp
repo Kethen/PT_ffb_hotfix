@@ -28,7 +28,7 @@ static void log_buffer(uint8_t *buf, size_t size){
 	}
 }
 
-static void patch(uint32_t location, uint8_t *buf, size_t size){
+void patch(uint32_t location, uint8_t *buf, size_t size){
 	DWORD old_protect;
 	VirtualProtect((void *)location, size, PAGE_EXECUTE_READWRITE, &old_protect);
 	LOG("0x%08x: ", location);
@@ -40,7 +40,7 @@ static void patch(uint32_t location, uint8_t *buf, size_t size){
 	VirtualProtect((void *)location, size, old_protect, &old_protect);
 }
 
-static void find_and_patch(void *begin, size_t size, uint8_t *target, uint8_t *patch_buf, size_t patch_size, uint32_t first_time, uint32_t times){
+void find_and_patch(void *begin, size_t size, uint8_t *target, uint8_t *patch_buf, size_t patch_size, uint32_t first_time, uint32_t times){
 	uint32_t i = 0;
 	for(uint32_t offset = 0;offset <= size - patch_size;offset++){
 		if(memcmp((void *)(offset + (uint32_t)begin), target, patch_size) == 0){
@@ -56,12 +56,12 @@ static void find_and_patch(void *begin, size_t size, uint8_t *target, uint8_t *p
 }
 
 // IDirectInputEffect::SetParameters
-uint32_t set_parameters(uint32_t effect_object, DIEFFECT *effect, uint32_t flags){
+static uint32_t set_parameters(uint32_t effect_object, DIEFFECT *effect, uint32_t flags){
 	uint32_t (__attribute__((stdcall)) *f)(uint32_t, uint32_t, uint32_t) = (uint32_t (__attribute__((stdcall)) *)(uint32_t, uint32_t, uint32_t))*(uint32_t *)(*(uint32_t *)effect_object + 0x18);
 	return f(effect_object, (uint32_t)effect, flags);
 }
 
-int32_t clamp_int32(int32_t min, int32_t max, int32_t value){
+static int32_t clamp_int32(int32_t min, int32_t max, int32_t value){
 	if(value > max){
 		return max;
 	}
@@ -80,8 +80,8 @@ void adjust_spring_effect(void *begin){
 }
 
 
-uint32_t init_effects_offset = 0;
-uint32_t (__attribute__((thiscall))*init_effects_orig)(uint32_t param_1, uint32_t param_2);
+static uint32_t init_effects_offset = 0;
+static uint32_t (__attribute__((thiscall))*init_effects_orig)(uint32_t param_1, uint32_t param_2);
 uint32_t __attribute__((thiscall)) init_effects_patched(uint32_t param_1, uint32_t param_2){
 	float max_vibration_setting = *(float *)(init_effects_offset + 0x70e584);
 
@@ -143,10 +143,10 @@ void hook_inif_effects(void* begin){
 }
 
 
-uint32_t send_constant_force_offset = 0;
+static uint32_t send_constant_force_offset = 0;
 static uint32_t (__attribute__((stdcall)) *send_constant_force_orig)(void *ctx, float param_1, float param_2);
 uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float param_1, float param_2){
-	#if 1
+	#if 0
 	static float param_1_max = 0;
 	float param_1_abs = abs(param_1);
 	if(param_1_abs > param_1_max){
@@ -155,9 +155,6 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 
 	LOG("%s: 0x%08x %f %f %f\n", __func__, ctx, param_1, param_2, param_1_max);
 	#endif
-
-	float *location = (float *)((uint32_t)ctx + 0x1584);
-	LOG("interesting value 0x%08x %f\n", location, *location);
 
 	// boost
 	#if 1
@@ -175,14 +172,14 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 
 	uint32_t unknown_object = *(uint32_t *)((uint32_t)ctx + 0x1408);
 	if(unknown_object == 0){
-		LOG("%s: unknown object is NULL\n", __func__);
+		//LOG("%s: unknown object is NULL\n", __func__);
 		return 0;
 	}
 
 	// just send param_1, param_2 seems to be 0 all the time
 	uint32_t effect_object = *(uint32_t *) (unknown_object + 0x14);
 	if(effect_object == 0){
-		LOG("%s: effect object is NULL\n", __func__);
+		//LOG("%s: effect object is NULL\n", __func__);
 		return 0;
 	}
 
@@ -200,7 +197,7 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 	effect.lpvTypeSpecificParams = &constant_force;
 
 	uint32_t ret = set_parameters(effect_object, &effect, DIEP_TYPESPECIFICPARAMS | DIEP_DIRECTION);
-	LOG("SetParameters ret %x\n", ret);
+	//LOG("SetParameters ret %x\n", ret);
 	return ret;
 
 	//return send_constant_force_orig(ctx, param_1, param_2);
