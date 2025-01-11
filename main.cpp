@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <psapi.h>
 #include <memoryapi.h>
+#include <heapapi.h>
 
 FILE *log_file = NULL;
 #define LOG(...){ \
@@ -52,10 +53,69 @@ static void find_and_patch(void *begin, size_t size, uint8_t *target, uint8_t *p
 	}
 }
 
+static uint32_t (__attribute__((stdcall)) *send_constant_force_orig)(void *ctx, float param_1, float param_2);
+uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float param_1, float param_2){
+	#if 1
+	LOG("%s: 0x%08x %f %f\n", __func__, ctx, param_1, param_2);
+	#endif
+	param_1 = param_1 * 10;
+	return send_constant_force_orig(ctx, param_1, param_2);
+}
+
+void hook_send_constant_force(void* begin){
+	static bool once = 0;
+	if(once){
+		return;
+	}
+	once = true;
+
+	const uint32_t target_offset = (uint32_t)begin + 0x1987C0;
+
+	static uint8_t trampoline[] = {
+		// original instruction
+		0x00,
+		0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		// mov eax, val
+		0xb8, 0x00, 0x00, 0x00, 0x00,
+		// jmp eax
+		0xff, 0xe0
+	};
+	memcpy(trampoline, (void *)target_offset, 9);
+	*(uint32_t *)&trampoline[10] = target_offset + 9;
+
+	send_constant_force_orig = (uint32_t (__attribute__((stdcall)) *)(void *ctx, float param_1, float param_2))trampoline;
+	DWORD old_protect;
+	int ret = VirtualProtect(trampoline, sizeof(trampoline), PAGE_EXECUTE_READWRITE, &old_protect);
+	if(ret == 0){
+		LOG("%s: failed setting virtual protect for trampoline, %x\n", __func__, GetLastError());
+		return;
+	}
+
+	uint8_t patch_buf[] = {
+		// mov eax, val
+		0xb8, 0x00, 0x00, 0x00, 0x00,
+
+		// jmp eax
+		0xff, 0xe0
+	};
+	*(uint32_t *)&patch_buf[1] = (uint32_t)send_constant_force_patched;
+
+	patch(target_offset, patch_buf, sizeof(patch_buf));
+	LOG("%s: patched 0x%08x\n", __func__, target_offset);
+}
+
 static void patch(void *begin, size_t size){
+	#if 1
+	// remove limiter
 	uint8_t target[] = {0xd9, 0x45, 0xc4, 0xd9, 0xc9, 0xdf, 0xf1, 0xdd, 0xd8, 0x76, 0x07};
 	uint8_t patch_buf[] = {0xd9, 0x45, 0xc4, 0xd9, 0xc9, 0xdf, 0xf1, 0xdd, 0xd8, 0xeb, 0x07};
 	find_and_patch(begin, size, target, patch_buf, sizeof(target), 0, 1);
+	#endif
+
+	// hook
+	hook_send_constant_force(begin);
 }
 
 void *patch_thread(void *arg){
@@ -94,7 +154,7 @@ void *patch_thread(void *arg){
 
 				patch(info.lpBaseOfDll, info.SizeOfImage);
 				// what the hell is this
-				patch((void *)0x0BE10000, info.SizeOfImage);
+				//patch((void *)0x0BE10000, info.SizeOfImage);
 				return NULL;
 			}
 		}
