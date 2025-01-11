@@ -55,15 +55,117 @@ static void find_and_patch(void *begin, size_t size, uint8_t *target, uint8_t *p
 	}
 }
 
+// IDirectInputEffect::SetParameters
+uint32_t set_parameters(uint32_t effect_object, DIEFFECT *effect, uint32_t flags){
+	uint32_t (__attribute__((stdcall)) *f)(uint32_t, uint32_t, uint32_t) = (uint32_t (__attribute__((stdcall)) *)(uint32_t, uint32_t, uint32_t))*(uint32_t *)(*(uint32_t *)effect_object + 0x18);
+	return f(effect_object, (uint32_t)effect, flags);
+}
+
+int32_t clamp_int32(int32_t min, int32_t max, int32_t value){
+	if(value > max){
+		return max;
+	}
+	if(value < min){
+		return min;
+	}
+	return value;
+}
+
+void adjust_spring_effect(void *begin){
+	uint32_t zero = 0;
+
+	// spring
+	patch((uint32_t)begin + 0x199a5d + 6, (uint8_t *)&zero, sizeof(zero));
+	patch((uint32_t)begin + 0x199a67 + 3, (uint8_t *)&zero, sizeof(zero));
+}
+
+
+uint32_t init_effects_offset = 0;
+uint32_t (__attribute__((thiscall))*init_effects_orig)(uint32_t param_1, uint32_t param_2);
+uint32_t __attribute__((thiscall)) init_effects_patched(uint32_t param_1, uint32_t param_2){
+	float max_vibration_setting = *(float *)(init_effects_offset + 0x70e584);
+
+	LOG("%s: setting damper to %f\n", __func__, max_vibration_setting);
+
+	// damper
+	uint32_t sat = clamp_int32(0, 10000, (int32_t)max_vibration_setting);
+	uint32_t coeff = sat;
+	patch(init_effects_offset + 0x199a7c + 3, (uint8_t *)&coeff, sizeof(coeff));
+	patch(init_effects_offset + 0x199a83 + 3, (uint8_t *)&coeff, sizeof(coeff));
+	patch(init_effects_offset + 0x199a8a + 3, (uint8_t *)&sat, sizeof(sat));
+	patch(init_effects_offset + 0x199a91 + 3, (uint8_t *)&sat, sizeof(sat));
+
+	return init_effects_orig(param_1, param_2);
+}
+
+void hook_inif_effects(void* begin){
+	static bool once = 0;
+	if(once){
+		return;
+	}
+	once = true;
+
+	const uint32_t target_offset = (uint32_t)begin + 0x199a00;
+	init_effects_offset = (uint32_t)begin;
+
+	static uint8_t trampoline[] = {
+		// original instruction
+		0x00,
+		0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		// mov eax, val
+		0xb8, 0x00, 0x00, 0x00, 0x00,
+		// jmp eax
+		0xff, 0xe0
+	};
+	memcpy(trampoline, (void *)target_offset, 9);
+	*(uint32_t *)&trampoline[10] = target_offset + 9;
+
+	init_effects_orig = (uint32_t (__attribute__((thiscall))*)(uint32_t param_1, uint32_t param_2))trampoline;
+	DWORD old_protect;
+	int ret = VirtualProtect(trampoline, sizeof(trampoline), PAGE_EXECUTE_READWRITE, &old_protect);
+	if(ret == 0){
+		LOG("%s: failed setting virtual protect for trampoline, %x\n", __func__, GetLastError());
+		return;
+	}
+
+	uint8_t patch_buf[] = {
+		// mov eax, val
+		0xb8, 0x00, 0x00, 0x00, 0x00,
+
+		// jmp eax
+		0xff, 0xe0
+	};
+	*(uint32_t *)&patch_buf[1] = (uint32_t)init_effects_patched;
+
+	patch(target_offset, patch_buf, sizeof(patch_buf));
+}
+
+
 uint32_t send_constant_force_offset = 0;
 static uint32_t (__attribute__((stdcall)) *send_constant_force_orig)(void *ctx, float param_1, float param_2);
 uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float param_1, float param_2){
 	#if 1
-	LOG("%s: 0x%08x %f %f\n", __func__, ctx, param_1, param_2);
+	static float param_1_max = 0;
+	float param_1_abs = abs(param_1);
+	if(param_1_abs > param_1_max){
+		param_1_max = param_1_abs;
+	}
+
+	LOG("%s: 0x%08x %f %f %f\n", __func__, ctx, param_1, param_2, param_1_max);
+	#endif
+
+	float *location = (float *)((uint32_t)ctx + 0x1584);
+	LOG("interesting value 0x%08x %f\n", location, *location);
+
+	// boost
+	#if 1
+		param_1 = param_1 * 5;
 	#endif
 
 	// boost low end
-	#if 1
+	#if 0
 	if(param_1 < 0.1){
 		param_1 = param_1 * 0.5 / 0.1;
 	}else{
@@ -72,7 +174,6 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 	#endif
 
 	uint32_t unknown_object = *(uint32_t *)((uint32_t)ctx + 0x1408);
-	LOG("unknown object 0x%08x\n", unknown_object);
 	if(unknown_object == 0){
 		LOG("%s: unknown object is NULL\n", __func__);
 		return 0;
@@ -80,7 +181,6 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 
 	// just send param_1, param_2 seems to be 0 all the time
 	uint32_t effect_object = *(uint32_t *) (unknown_object + 0x14);
-	LOG("effect object 0x%08x\n", effect_object);
 	if(effect_object == 0){
 		LOG("%s: effect object is NULL\n", __func__);
 		return 0;
@@ -89,7 +189,7 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 	uint32_t ndirections = *(uint32_t *)((uint32_t)ctx + 0x1404);
 	float max_force_setting = *(float *)(send_constant_force_offset + 0x70e580);
 	DIEFFECT effect = {0};
-	DICONSTANTFORCE constant_force = {.lMagnitude = (LONG)(param_1 * max_force_setting)};
+	DICONSTANTFORCE constant_force = {.lMagnitude = clamp_int32(-10000, 10000, (int32_t)(param_1 * max_force_setting))};
 	LONG directions[ndirections] = {0};
 	directions[0] = 1;
 	effect.dwSize = sizeof(effect);
@@ -99,10 +199,8 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 	effect.cbTypeSpecificParams = sizeof(constant_force);
 	effect.lpvTypeSpecificParams = &constant_force;
 
-	// IDirectInputEffect::SetParameters
-	uint32_t (__attribute__((stdcall)) *f)(uint32_t, uint32_t, uint32_t) = (uint32_t (__attribute__((stdcall)) *)(uint32_t, uint32_t, uint32_t))*(uint32_t *)(*(uint32_t *)effect_object + 0x18);
-	uint32_t ret = f(effect_object, (uint32_t)&effect, DIEP_TYPESPECIFICPARAMS | DIEP_DIRECTION);
-	//LOG("SetParameters ret %x\n", ret);
+	uint32_t ret = set_parameters(effect_object, &effect, DIEP_TYPESPECIFICPARAMS | DIEP_DIRECTION);
+	LOG("SetParameters ret %x\n", ret);
 	return ret;
 
 	//return send_constant_force_orig(ctx, param_1, param_2);
@@ -115,14 +213,22 @@ void hook_send_constant_force(void* begin){
 	}
 	once = true;
 
-	// remove limiters
+	#if 1
+	// remove limiter
 	uint32_t target = (uint32_t)begin + 0x198851 + 9;
 	send_constant_force_offset = (uint32_t)begin;
 	uint8_t patch_byte = 0xeb;
 	patch(target, &patch_byte, sizeof(patch_byte));
 
+	// disable other effects
 	target = (uint32_t)begin + 0x19DA8F;
 	patch(target, &patch_byte, sizeof(patch_byte));
+
+	// patch ffb filter
+	uint8_t patch_ffb_filter[] = {0x90, 0x90};
+	target = (uint32_t)begin + 0x19cf24;
+	patch(target, patch_ffb_filter, sizeof(patch_ffb_filter));
+	#endif
 
 	const uint32_t target_offset = (uint32_t)begin + 0x1987C0;
 
@@ -161,22 +267,17 @@ void hook_send_constant_force(void* begin){
 }
 
 static void patch(void *begin, size_t size){
-	#if 0
-	// remove limiter
-	uint8_t target[] = {0xd9, 0x45, 0xc4, 0xd9, 0xc9, 0xdf, 0xf1, 0xdd, 0xd8, 0x76, 0x07};
-	uint8_t patch_buf[] = {0xd9, 0x45, 0xc4, 0xd9, 0xc9, 0xdf, 0xf1, 0xdd, 0xd8, 0xeb, 0x07};
-	find_and_patch(begin, size, target, patch_buf, sizeof(target), 0, 1);
-	#endif
-
 	// hook
 	hook_send_constant_force(begin);
+	adjust_spring_effect(begin);
+	hook_inif_effects(begin);
 }
 
 void *patch_thread(void *arg){
 	LOG("%s: begins\n", __func__);
 
 	while(true){
-		sleep(2);
+		sleep(0);
 
 		LOG("enumerating modules:\n");
 
@@ -203,7 +304,6 @@ void *patch_thread(void *arg){
 			LOG("module %s at 0x%08x\n", module_name, info.lpBaseOfDll);
 
 			if(strcmp("CRC_ReleaseNoDebug.dll", module_name) == 0){
-				sleep(3);
 				LOG("target found\n");
 
 				patch(info.lpBaseOfDll, info.SizeOfImage);
