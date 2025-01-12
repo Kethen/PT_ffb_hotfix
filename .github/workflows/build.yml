@@ -34,4 +34,5 @@ jobs:
            project_torque_ffb_hotpatch.asi
            project_torque_ffb_hotpatch_reversed.asi
            dfengine.dll
+           LICENSE.MIT
         if-no-files-found: error
