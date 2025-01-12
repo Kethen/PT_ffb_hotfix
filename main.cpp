@@ -188,7 +188,11 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 	DIEFFECT effect = {0};
 	DICONSTANTFORCE constant_force = {.lMagnitude = clamp_int32(-10000, 10000, (int32_t)(param_1 * max_force_setting))};
 	LONG directions[ndirections] = {0};
+	#ifndef REVERSED
 	directions[0] = 1;
+	#else
+	directions[0] = -1;
+	#endif
 	effect.dwSize = sizeof(effect);
 	effect.dwFlags = DIEFF_OBJECTOFFSETS | DIEFF_CARTESIAN;
 	effect.cAxes = ndirections;

@@ -38,6 +38,7 @@ jobs:
         name: project_torque_ffb_hotpatch_${{ env.sha_name }}
         path: |
            project_torque_ffb_hotpatch.asi
+           project_torque_ffb_hotpatch_reversed.asi
            version.dll
            global.ini
         if-no-files-found: error
