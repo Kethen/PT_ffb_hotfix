@@ -16,7 +16,7 @@
 FILE *log_file = NULL;
 #define LOG(...){ \
 	if(log_file == NULL){ \
-		log_file = fopen("./project_torque_hot_patch.log", "w"); \
+		log_file = fopen("./project_torque_ffb_hotpatch_log.txt", "w"); \
 	} \
 	fprintf(log_file, __VA_ARGS__); \
 	fflush(log_file); \
@@ -158,7 +158,7 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 
 	// boost
 	#if 1
-		param_1 = param_1 * 5;
+		param_1 = param_1 * 10;
 	#endif
 
 	// boost low end
