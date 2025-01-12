@@ -22,7 +22,7 @@ FILE *log_file = NULL;
 
 // default call convention?
 
-void * (*GetDFEngine_)();
+void * (*GetDFEngine_)() = NULL;
 void * GetDFEngine(){
 	if(GetDFEngine_){
 		void *ret = GetDFEngine_();
