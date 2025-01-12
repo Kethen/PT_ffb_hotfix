@@ -18,8 +18,10 @@ FILE *log_file = NULL;
 	if(log_file == NULL){ \
 		log_file = fopen("./project_torque_ffb_hotpatch_log.txt", "w"); \
 	} \
-	fprintf(log_file, __VA_ARGS__); \
-	fflush(log_file); \
+	if(log_file != NULL){ \
+		fprintf(log_file, __VA_ARGS__); \
+		fflush(log_file); \
+	} \
 }
 
 static void log_buffer(uint8_t *buf, size_t size){
