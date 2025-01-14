@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 
 #include <pthread.h>
 #include <unistd.h>
@@ -81,6 +82,72 @@ void adjust_spring_effect(void *begin){
 	patch((uint32_t)begin + 0x199a67 + 3, (uint8_t *)&zero, sizeof(zero));
 }
 
+static uint32_t forward_ffb_effects_offset = 0;
+static void (__attribute__((fastcall)) *forward_ffb_effects_orig)(uint32_t param_1);
+void __attribute__((fastcall)) forward_ffb_effects_patched(uint32_t param_1){
+	static uint32_t (__attribute__((stdcall))*FUN_1019cdf0)(int32_t) = (uint32_t (__attribute__((stdcall))*)(int32_t))(forward_ffb_effects_offset + 0x19cdf0);
+	static uint32_t (__attribute__((stdcall))*FUN_1019cee0)(int32_t, float, uint32_t) = (uint32_t (__attribute__((stdcall))*)(int32_t, float, uint32_t))(forward_ffb_effects_offset + 0x19cee0);
+
+	int32_t *effect_buf = (int32_t *)(param_1 + 0x1d64);
+	uint32_t ret_addr = (uint32_t)__builtin_return_address(2);
+
+	uint32_t unknown_object = param_1 + 4 + 1 * 0x50;
+	uint32_t unknown_value = *(uint32_t *)(unknown_object + 8);
+	float *value = (float *)(unknown_object + 0x48);
+	if(unknown_value == 1){
+		FUN_1019cee0(2, *value, 0);
+	}
+
+	//LOG("%s: value is 0x%08x %f, unknown value is 0x%08x\n", __func__, value, *value, unknown_value);
+
+	forward_ffb_effects_orig(param_1);
+
+	return;
+}
+
+void hook_forward_ffb_effects(void* begin){
+	static bool once = 0;
+	if(once){
+		return;
+	}
+	once = true;
+
+	const uint32_t target_offset = (uint32_t)begin + 0x1a0370;
+	forward_ffb_effects_offset = (uint32_t)begin;
+
+	static uint8_t trampoline[] = {
+		// original instruction
+		0x00,
+		0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		// mov eax, val
+		0xb8, 0x00, 0x00, 0x00, 0x00,
+		// jmp eax
+		0xff, 0xe0
+	};
+	memcpy(trampoline, (void *)target_offset, 9);
+	*(uint32_t *)&trampoline[10] = target_offset + 9;
+
+	forward_ffb_effects_orig = (void (__attribute__((fastcall)) *)(uint32_t param_1))trampoline;
+	DWORD old_protect;
+	int ret = VirtualProtect(trampoline, sizeof(trampoline), PAGE_EXECUTE_READWRITE, &old_protect);
+	if(ret == 0){
+		LOG("%s: failed setting virtual protect for trampoline, %x\n", __func__, GetLastError());
+		return;
+	}
+
+	uint8_t patch_buf[] = {
+		// mov eax, val
+		0xb8, 0x00, 0x00, 0x00, 0x00,
+
+		// jmp eax
+		0xff, 0xe0
+	};
+	*(uint32_t *)&patch_buf[1] = (uint32_t)forward_ffb_effects_patched;
+
+	patch(target_offset, patch_buf, sizeof(patch_buf));
+}
 
 static uint32_t init_effects_offset = 0;
 static uint32_t (__attribute__((thiscall))*init_effects_orig)(uint32_t param_1, uint32_t param_2);
@@ -155,7 +222,7 @@ uint32_t __attribute__((stdcall))send_constant_force_patched(void *ctx, float pa
 		param_1_max = param_1_abs;
 	}
 
-	LOG("%s: 0x%08x %f %f %f\n", __func__, ctx, param_1, param_2, param_1_max);
+	LOG("%s: 0x%08x %f %f %f, 0x%08x\n", __func__, ctx, param_1, param_2, param_1_max, (uint32_t)ctx + 0x1584);
 	#endif
 
 	// boost
@@ -231,6 +298,7 @@ void hook_send_constant_force(void* begin){
 	uint8_t patch_ffb_filter[] = {0x90, 0x90};
 	target = (uint32_t)begin + 0x19cf24;
 	patch(target, patch_ffb_filter, sizeof(patch_ffb_filter));
+
 	#endif
 
 	const uint32_t target_offset = (uint32_t)begin + 0x1987C0;
@@ -274,6 +342,7 @@ static void patch(void *begin, size_t size){
 	hook_send_constant_force(begin);
 	adjust_spring_effect(begin);
 	hook_inif_effects(begin);
+	hook_forward_ffb_effects(begin);
 }
 
 void *patch_thread(void *arg){
